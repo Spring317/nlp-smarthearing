@@ -4,6 +4,8 @@ import torchaudio
 import librosa
 from transformers import Wav2Vec2Processor, Wav2Vec2ForCTC
 from datasets import load_dataset
+from itertools import groupby
+import re
 
 # === SETTINGS ===
 COMMON_VOICE_LANG = "vi"  # Language code for Vietnamese
@@ -38,55 +40,55 @@ if sr != 16000:
 
 # Tokenize input
 inputs = processor(waveform.squeeze(), sampling_rate=sr, return_tensors="pt")
+
+# === Group characters into syllables ===
+# Get transcription from ASR model
 with torch.no_grad():
     logits = model(**inputs).logits
-
-# === Decode tokens and track segments ===
+    
+# Get token predictions with CTC decoding
 pred_ids = torch.argmax(logits, dim=-1)[0].tolist()
-tokens = processor.tokenizer.convert_ids_to_tokens(pred_ids)
+char_tokens = processor.decode(pred_ids).lower()
 
-logit_len = logits.shape[1]
+# Split into syllables using regex pattern for Vietnamese
+# Vietnamese syllables are typically separated by spaces
+syllables = re.findall(r'\S+', char_tokens)
+print(f"Detected syllables: {syllables}")
+
+# Calculate approximate time per character
 audio_len_sec = waveform.shape[1] / sr
-frame_duration = audio_len_sec / logit_len
+chars_per_sec = len(char_tokens) / audio_len_sec
 
-segments = []
-last_token = None
-for i, token_id in enumerate(pred_ids):
-    token = processor.tokenizer.convert_ids_to_tokens([token_id])[0]
-    
-    # Fixed condition - check for pad token and other special tokens without using blank_token
-    if token == last_token or token == processor.tokenizer.pad_token or token in ["<pad>", "<s>", "</s>"]:
-        continue
-
-    end_time = i * frame_duration
-    segments.append((token, end_time))
-    last_token = token
-
-# === Export segments to .wav files ===
-segment_start = 0.0
+# Estimate syllable positions in audio
 valid_subwords = 0
-for idx, (token, end_time) in enumerate(segments):
-    start_sample = int(segment_start * sr)
-    end_sample = int(end_time * sr)
-    segment_waveform = waveform[:, start_sample:end_sample]
-    duration = end_time - segment_start
+current_pos = 0
+for syllable in syllables:
+    # Estimate syllable duration based on character count
+    syllable_len = len(syllable)
+    syllable_duration = syllable_len / chars_per_sec
     
-    # Skip segments that are too short or too long for KWS
-    if duration < MIN_DURATION or duration > MAX_DURATION:
-        segment_start = end_time
+    # Skip if too short or too long
+    if syllable_duration < MIN_DURATION or syllable_duration > MAX_DURATION:
+        current_pos += syllable_len
         continue
     
-    # Sanitize file name - handle Vietnamese characters carefully
-    token_clean = token.replace("▁", "").replace("/", "_").strip("_")
-    if token_clean == "":
-        token_clean = f"unk_{idx}"
-
-    file_path = os.path.join(OUTPUT_DIR, f"{valid_subwords:03d}_{token_clean}.wav")
+    # Calculate start and end samples
+    start_sample = int(current_pos / len(char_tokens) * waveform.shape[1])
+    end_sample = int((current_pos + syllable_len) / len(char_tokens) * waveform.shape[1])
+    
+    # Extract audio segment
+    segment_waveform = waveform[:, start_sample:end_sample]
+    
+    # Clean syllable for filename
+    syllable_clean = re.sub(r'[^\w\sáàảãạăắằẳẵặâấầẩẫậéèẻẽẹêếềểễệíìỉĩịóòỏõọôốồổỗộơớờởỡợúùủũụưứừửữựýỳỷỹỵđ]', '', syllable)
+    
+    # Save syllable audio
+    file_path = os.path.join(OUTPUT_DIR, f"{valid_subwords:03d}_{syllable_clean}.wav")
     torchaudio.save(file_path, segment_waveform, sample_rate=sr)
     
-    print(f"Saved: {file_path}  | Duration: {duration:.2f}s | Token: {token}")
+    print(f"Saved: {file_path} | Duration: {syllable_duration:.2f}s | Syllable: {syllable}")
     valid_subwords += 1
-    segment_start = end_time
+    current_pos += syllable_len
 
 print(f"Extracted {valid_subwords} valid KWS segments")
 
