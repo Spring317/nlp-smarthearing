@@ -6,11 +6,13 @@ from transformers import Wav2Vec2Processor, Wav2Vec2ForCTC
 from datasets import load_dataset
 
 # === SETTINGS ===
-COMMON_VOICE_LANG = "vi"  # Language code (e.g., "vi" for Vietnamese)
+COMMON_VOICE_LANG = "vi"  # Language code for Vietnamese
 COMMON_VOICE_SPLIT = "test"  # Dataset split: "train", "test", "validation"
 SAMPLE_INDEX = 0  # Index of the sample to process
 OUTPUT_DIR = "kws_segments"  # Folder to store subword WAV clips
 MODEL_NAME = "nguyenvulebinh/wav2vec2-large-vi-vlsp2020"
+MAX_DURATION = 1.0  # Maximum duration for KWS samples (typically 1s)
+MIN_DURATION = 0.1  # Minimum duration for meaningful segments
 
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
@@ -19,10 +21,13 @@ processor = Wav2Vec2Processor.from_pretrained(MODEL_NAME)
 model = Wav2Vec2ForCTC.from_pretrained(MODEL_NAME)
 model.eval()
 
-# === Load audio from Common Voice dataset ===
-dataset = load_dataset("common_voice", COMMON_VOICE_LANG, split=COMMON_VOICE_SPLIT)
+# === Load audio from Common Voice dataset (using updated path) ===
+dataset = load_dataset("mozilla-foundation/common_voice_11_0", COMMON_VOICE_LANG, 
+                      split=COMMON_VOICE_SPLIT, trust_remote_code=True)
 sample = dataset[SAMPLE_INDEX]
 audio_path = sample["audio"]["path"]
+print(f"Processing: {audio_path}")
+print(f"Text: {sample['sentence']}")
 
 # === Load and preprocess audio ===
 waveform, sr = torchaudio.load(audio_path)
@@ -58,19 +63,28 @@ for i, token_id in enumerate(pred_ids):
 
 # === Export segments to .wav files ===
 segment_start = 0.0
+valid_subwords = 0
 for idx, (token, end_time) in enumerate(segments):
     start_sample = int(segment_start * sr)
     end_sample = int(end_time * sr)
     segment_waveform = waveform[:, start_sample:end_sample]
-
-    # Sanitize file name
+    duration = end_time - segment_start
+    
+    # Skip segments that are too short or too long for KWS
+    if duration < MIN_DURATION or duration > MAX_DURATION:
+        segment_start = end_time
+        continue
+    
+    # Sanitize file name - handle Vietnamese characters carefully
     token_clean = token.replace("▁", "").replace("/", "_").strip("_")
     if token_clean == "":
         token_clean = f"unk_{idx}"
 
-    file_path = os.path.join(OUTPUT_DIR, f"{idx:03d}_{token_clean}.wav")
+    file_path = os.path.join(OUTPUT_DIR, f"{valid_subwords:03d}_{token_clean}.wav")
     torchaudio.save(file_path, segment_waveform, sample_rate=sr)
-
-    print(f"Saved: {file_path}  | Duration: {end_time - segment_start:.2f}s | Token: {token}")
-
+    
+    print(f"Saved: {file_path}  | Duration: {duration:.2f}s | Token: {token}")
+    valid_subwords += 1
     segment_start = end_time
+
+print(f"Extracted {valid_subwords} valid KWS segments")
