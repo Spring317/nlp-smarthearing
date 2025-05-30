@@ -5,6 +5,7 @@ import librosa
 import numpy as np
 from transformers import Wav2Vec2Processor, Wav2Vec2ForCTC
 from datasets import load_dataset
+from itertools import groupby
 
 # === SETTINGS ===
 COMMON_VOICE_LANG = "vi"  # Language code for Vietnamese
@@ -14,7 +15,7 @@ OUTPUT_DIR = "kws_segments"  # Folder to store subword WAV clips
 MODEL_NAME = "nguyenvulebinh/wav2vec2-large-vi-vlsp2020"
 MAX_DURATION = 1.0  # Maximum duration for KWS samples (typically 1s)
 MIN_DURATION = 0.1  # Minimum duration for meaningful segments
-CONFIDENCE_THRESHOLD = 0.8  # Minimum confidence for token prediction
+CONFIDENCE_THRESHOLD = 0.5  # Reduced from 0.8
 
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
@@ -54,40 +55,31 @@ logit_len = logits.shape[1]
 audio_len_sec = waveform.shape[1] / sr
 frame_duration = audio_len_sec / logit_len
 
-# === Group tokens into actual words ===
-words = []
-current_word = []
-current_word_start = 0
-current_word_end = 0
-current_confidence = []
+# === Group tokens with CTC decoding ===
+# Decode with CTC rules (collapse repeated tokens and remove special tokens)
+collapsed_tokens = []
+token_times = []
 
-for i, (token_id, conf) in enumerate(zip(pred_ids, confidence)):
+# Group duplicate consecutive tokens (CTC decoding)
+for i, ((token_id, _), time_idx) in enumerate(zip(groupby(zip(pred_ids, confidence)), range(len(pred_ids)))):
     token = processor.tokenizer.convert_ids_to_tokens([token_id])[0]
-    
-    if token in ["<pad>", "<s>", "</s>"] or token == processor.tokenizer.pad_token:
-        continue
-        
-    # Vietnamese words are often prefixed with ▁ to denote word boundaries
-    if token.startswith("▁") and current_word:
-        # End the previous word
-        if current_word:
-            avg_confidence = sum(current_confidence) / len(current_confidence) if current_confidence else 0
-            words.append((current_word_start, current_word_end, "".join(current_word).replace("▁", ""), avg_confidence))
-            current_word = []
-            current_confidence = []
-            
-    # Start tracking this token
-    if not current_word:
-        current_word_start = i * frame_duration
-    
-    current_word.append(token)
-    current_confidence.append(conf)
-    current_word_end = (i + 1) * frame_duration
+    if token not in ["<pad>", "<s>", "</s>"] and token != processor.tokenizer.pad_token:
+        collapsed_tokens.append(token)
+        token_times.append(time_idx * frame_duration)
 
-# Add the last word if there is one
-if current_word:
-    avg_confidence = sum(current_confidence) / len(current_confidence) if current_confidence else 0
-    words.append((current_word_start, current_word_end, "".join(current_word).replace("▁", ""), avg_confidence))
+# Group into words (Vietnamese words are typically single syllables)
+words = []
+for i, (token, time) in enumerate(zip(collapsed_tokens, token_times)):
+    # Each token is treated as a separate word in Vietnamese
+    if token.strip():  # Skip empty tokens
+        end_time = (time + frame_duration * 5)  # Extend slightly for better word capture
+        start_time = max(0, time - frame_duration)  # Start slightly before 
+        words.append((start_time, end_time, token, 1.0))  # Assuming confidence = 1.0 for now
+
+# Add before word extraction code
+print(f"Total tokens: {len(pred_ids)}")
+print(f"Sample tokens: {processor.tokenizer.convert_ids_to_tokens(pred_ids[:20])}")
+print(f"Sample confidence scores: {confidence[:5]}")
 
 # === Export word segments to .wav files ===
 valid_words = 0
@@ -116,3 +108,8 @@ for idx, (start_time, end_time, word, confidence) in enumerate(words):
     valid_words += 1
 
 print(f"Extracted {valid_words} valid word segments")
+
+# Add before the end of the script
+print(f"Words found before filtering: {len(words)}")
+print(f"Words with low confidence: {sum(1 for _, _, _, conf in words if conf < CONFIDENCE_THRESHOLD)}")
+print(f"Words outside duration range: {sum(1 for start, end, _, _ in words if (end-start) < MIN_DURATION or (end-start) > MAX_DURATION)}")
