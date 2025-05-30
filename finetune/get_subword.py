@@ -9,7 +9,7 @@ from typing import List, Tuple, Optional, Dict, Any
 from tqdm import tqdm
 import argparse
 import pandas as pd
-
+from utils.get_syllables import extract_syllables
 
 class VietnameseKeywordExtractor:
     """A class for extracting Vietnamese keywords from audio files."""
@@ -140,6 +140,7 @@ class VietnameseKeywordExtractor:
     def extract_syllable_segments(
         self, 
         waveform: torch.Tensor, 
+# This line of code is checking if the `extractor` object has a method named `get_extracted_keywords`.
         sr: int, 
         syllables: List[str],
         char_tokens: str,
@@ -288,21 +289,7 @@ def organize_keywords_for_kws(base_dir: str) -> None:
     Args:
         base_dir: Base directory containing extracted WAV files
     """
-    # Find all WAV files
-    wav_files = [f for f in os.listdir(base_dir) if f.endswith('.wav')]
-    
-    # Extract unique syllables
-    syllables = set()
-    for filename in wav_files:
-        # Extract syllable from filename (after index prefix)
-        parts = filename.split('_', 1)
-        if len(parts) > 1:
-            syllable = parts[1].split('.')[0]
-            if syllable:
-                syllables.add(syllable)
-    
-    print(f"Found {len(syllables)} unique syllables")
-    
+    syllables = extract_syllables(base_dir)
     # Create syllable directories and copy files
     for syllable in syllables:
         # Create directory for syllable
@@ -328,4 +315,5 @@ def organize_keywords_for_kws(base_dir: str) -> None:
 
 if __name__ == "__main__":
     main()
+
 
