@@ -1,0 +1,6 @@
+torch
+torchaudio 
+itertools
+transformers
+datasets
+
