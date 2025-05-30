@@ -2,6 +2,7 @@ import os
 import torch
 import torchaudio
 import librosa
+import numpy as np
 from transformers import Wav2Vec2Processor, Wav2Vec2ForCTC
 from datasets import load_dataset
 
@@ -13,6 +14,7 @@ OUTPUT_DIR = "kws_segments"  # Folder to store subword WAV clips
 MODEL_NAME = "nguyenvulebinh/wav2vec2-large-vi-vlsp2020"
 MAX_DURATION = 1.0  # Maximum duration for KWS samples (typically 1s)
 MIN_DURATION = 0.1  # Minimum duration for meaningful segments
+CONFIDENCE_THRESHOLD = 0.8  # Minimum confidence for token prediction
 
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
@@ -21,7 +23,7 @@ processor = Wav2Vec2Processor.from_pretrained(MODEL_NAME)
 model = Wav2Vec2ForCTC.from_pretrained(MODEL_NAME)
 model.eval()
 
-# === Load audio from Common Voice dataset (using updated path) ===
+# === Load audio from Common Voice dataset ===
 dataset = load_dataset("mozilla-foundation/common_voice_11_0", COMMON_VOICE_LANG, 
                       split=COMMON_VOICE_SPLIT, trust_remote_code=True)
 sample = dataset[SAMPLE_INDEX]
@@ -39,53 +41,78 @@ if sr != 16000:
 # Tokenize input
 inputs = processor(waveform.squeeze(), sampling_rate=sr, return_tensors="pt")
 with torch.no_grad():
-    logits = model(**inputs).logits
+    outputs = model(**inputs)
+    logits = outputs.logits
 
-# === Decode tokens and track segments ===
+# === Decode with proper word-level segmentation ===
 pred_ids = torch.argmax(logits, dim=-1)[0].tolist()
-tokens = processor.tokenizer.convert_ids_to_tokens(pred_ids)
+# Calculate token probabilities for confidence filtering
+probs = torch.nn.functional.softmax(logits, dim=-1)
+confidence = torch.max(probs, dim=-1)[0][0].tolist()  # Get confidence scores
 
 logit_len = logits.shape[1]
 audio_len_sec = waveform.shape[1] / sr
 frame_duration = audio_len_sec / logit_len
 
-segments = []
-last_token = None
-for i, token_id in enumerate(pred_ids):
+# === Group tokens into actual words ===
+words = []
+current_word = []
+current_word_start = 0
+current_word_end = 0
+current_confidence = []
+
+for i, (token_id, conf) in enumerate(zip(pred_ids, confidence)):
     token = processor.tokenizer.convert_ids_to_tokens([token_id])[0]
     
-    # Fixed condition - check for pad token and other special tokens without using blank_token
-    if token == last_token or token == processor.tokenizer.pad_token or token in ["<pad>", "<s>", "</s>"]:
+    if token in ["<pad>", "<s>", "</s>"] or token == processor.tokenizer.pad_token:
         continue
+        
+    # Vietnamese words are often prefixed with ▁ to denote word boundaries
+    if token.startswith("▁") and current_word:
+        # End the previous word
+        if current_word:
+            avg_confidence = sum(current_confidence) / len(current_confidence) if current_confidence else 0
+            words.append((current_word_start, current_word_end, "".join(current_word).replace("▁", ""), avg_confidence))
+            current_word = []
+            current_confidence = []
+            
+    # Start tracking this token
+    if not current_word:
+        current_word_start = i * frame_duration
+    
+    current_word.append(token)
+    current_confidence.append(conf)
+    current_word_end = (i + 1) * frame_duration
 
-    end_time = i * frame_duration
-    segments.append((token, end_time))
-    last_token = token
+# Add the last word if there is one
+if current_word:
+    avg_confidence = sum(current_confidence) / len(current_confidence) if current_confidence else 0
+    words.append((current_word_start, current_word_end, "".join(current_word).replace("▁", ""), avg_confidence))
 
-# === Export segments to .wav files ===
-segment_start = 0.0
-valid_subwords = 0
-for idx, (token, end_time) in enumerate(segments):
-    start_sample = int(segment_start * sr)
+# === Export word segments to .wav files ===
+valid_words = 0
+for idx, (start_time, end_time, word, confidence) in enumerate(words):
+    start_sample = int(start_time * sr)
     end_sample = int(end_time * sr)
-    segment_waveform = waveform[:, start_sample:end_sample]
-    duration = end_time - segment_start
+    if end_sample > waveform.shape[1]:
+        end_sample = waveform.shape[1]
     
-    # Skip segments that are too short or too long for KWS
-    if duration < MIN_DURATION or duration > MAX_DURATION:
-        segment_start = end_time
+    word_waveform = waveform[:, start_sample:end_sample]
+    duration = end_time - start_time
+    
+    # Skip segments that are too short, too long, or low confidence
+    if duration < MIN_DURATION or duration > MAX_DURATION or confidence < CONFIDENCE_THRESHOLD:
         continue
     
-    # Sanitize file name - handle Vietnamese characters carefully
-    token_clean = token.replace("▁", "").replace("/", "_").strip("_")
-    if token_clean == "":
-        token_clean = f"unk_{idx}"
+    # Sanitize and clean up the word for filename
+    word_clean = "".join(c for c in word if c.isalnum() or c in "áàảãạăắằẳẵặâấầẩẫậéèẻẽẹêếềểễệíìỉĩịóòỏõọôốồổỗộơớờởỡợúùủũụưứừửữựýỳỷỹỵđ")
+    if not word_clean:
+        word_clean = f"unk_{idx}"
 
-    file_path = os.path.join(OUTPUT_DIR, f"{valid_subwords:03d}_{token_clean}.wav")
-    torchaudio.save(file_path, segment_waveform, sample_rate=sr)
+    file_path = os.path.join(OUTPUT_DIR, f"{valid_words:03d}_{word_clean}.wav")
+    torchaudio.save(file_path, word_waveform, sample_rate=sr)
     
-    print(f"Saved: {file_path}  | Duration: {duration:.2f}s | Token: {token}")
-    valid_subwords += 1
-    segment_start = end_time
+    print(f"Saved: {file_path} | Duration: {duration:.2f}s | Word: {word} | Confidence: {confidence:.2f}")
+    valid_words += 1
 
-print(f"Extracted {valid_subwords} valid KWS segments")
+print(f"Extracted {valid_words} valid word segments")
