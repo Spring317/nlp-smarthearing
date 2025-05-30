@@ -3,10 +3,13 @@ import torch
 import torchaudio
 import librosa
 from transformers import Wav2Vec2Processor, Wav2Vec2ForCTC
+from datasets import load_dataset
 
 # === SETTINGS ===
-AUDIO_PATH = "your_audio.wav"  # Path to input WAV file
-OUTPUT_DIR = "kws_segments"    # Folder to store subword WAV clips
+COMMON_VOICE_LANG = "vi"  # Language code (e.g., "vi" for Vietnamese)
+COMMON_VOICE_SPLIT = "test"  # Dataset split: "train", "test", "validation"
+SAMPLE_INDEX = 0  # Index of the sample to process
+OUTPUT_DIR = "kws_segments"  # Folder to store subword WAV clips
 MODEL_NAME = "nguyenvulebinh/wav2vec2-large-vi-vlsp2020"
 
 os.makedirs(OUTPUT_DIR, exist_ok=True)
@@ -16,8 +19,13 @@ processor = Wav2Vec2Processor.from_pretrained(MODEL_NAME)
 model = Wav2Vec2ForCTC.from_pretrained(MODEL_NAME)
 model.eval()
 
+# === Load audio from Common Voice dataset ===
+dataset = load_dataset("common_voice", COMMON_VOICE_LANG, split=COMMON_VOICE_SPLIT)
+sample = dataset[SAMPLE_INDEX]
+audio_path = sample["audio"]["path"]
+
 # === Load and preprocess audio ===
-waveform, sr = torchaudio.load(AUDIO_PATH)
+waveform, sr = torchaudio.load(audio_path)
 if sr != 16000:
     waveform_np = librosa.resample(waveform.numpy()[0], orig_sr=sr, target_sr=16000)
     waveform = torch.tensor(waveform_np).unsqueeze(0)
