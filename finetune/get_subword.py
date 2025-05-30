@@ -6,6 +6,9 @@ import re
 from transformers import Wav2Vec2Processor, Wav2Vec2ForCTC
 from datasets import load_dataset, Dataset, DatasetDict
 from typing import List, Tuple, Optional, Dict, Any
+from tqdm import tqdm
+import argparse
+import pandas as pd
 
 
 class VietnameseKeywordExtractor:
@@ -189,30 +192,138 @@ class VietnameseKeywordExtractor:
             current_pos += syllable_len
             
         return valid_subwords
+    
+    def process_dataset(self, dataset: Dataset, max_samples: Optional[int] = None) -> Dict[str, int]:
+        """Process multiple samples from the dataset and extract keywords.
+        
+        Args:
+            dataset: Dataset containing samples
+            max_samples: Maximum number of samples to process (None for all)
+            
+        Returns:
+            Dictionary with statistics about extracted keywords
+        """
+        num_samples = len(dataset) if max_samples is None else min(max_samples, len(dataset))
+        print(f"Processing {num_samples} samples from dataset...")
+        
+        # Track statistics
+        stats = {
+            "total_samples": num_samples,
+            "processed_samples": 0,
+            "total_segments": 0,
+            "unique_syllables": set(),
+            "failed_samples": 0
+        }
+        
+        # Create a metadata DataFrame
+        metadata = []
+        
+        # Process each sample with progress bar
+        for i in tqdm(range(num_samples)):
+            try:
+                # Process the sample
+                segments = self.process_sample(i, dataset)
+                
+                stats["processed_samples"] += 1
+                stats["total_segments"] += segments
+                
+                # Add sample info to metadata
+                if segments > 0:
+                    sample = dataset[i]
+                    metadata.append({
+                        "sample_id": i,
+                        "text": sample["sentence"],
+                        "segments_extracted": segments,
+                        "audio_path": sample["audio"]["path"]
+                    })
+                
+            except Exception as e:
+                print(f"Error processing sample {i}: {e}")
+                stats["failed_samples"] += 1
+        
+        # Save metadata to CSV
+        metadata_df = pd.DataFrame(metadata)
+        metadata_df.to_csv(os.path.join(self.output_dir, "metadata.csv"), index=False)
+        
+        print(f"Processed {stats['processed_samples']} samples")
+        print(f"Failed to process {stats['failed_samples']} samples")
+        print(f"Extracted {stats['total_segments']} keyword segments total")
+        
+        return stats
 
 
 def main() -> None:
     """Main function to extract Vietnamese keywords."""
-    # Settings
-    COMMON_VOICE_LANG = "vi"
-    COMMON_VOICE_SPLIT = "test"
-    SAMPLE_INDEX = 0
-    MODEL_NAME = "nguyenvulebinh/wav2vec2-base-vietnamese-250h"
-    OUTPUT_DIR = "kws_segments"
+    # Parse command-line arguments
+    parser = argparse.ArgumentParser(description="Extract Vietnamese keywords from audio")
+    parser.add_argument("--lang", default="vi", help="Language code")
+    parser.add_argument("--split", default="test", help="Dataset split (train, test, validation)")
+    parser.add_argument("--max-samples", type=int, default=None, help="Max samples to process (None for all)")
+    parser.add_argument("--output-dir", default="kws_segments", help="Output directory")
+    parser.add_argument("--model", default="nguyenvulebinh/wav2vec2-base-vietnamese-250h", 
+                       help="Pretrained ASR model")
+    args = parser.parse_args()
     
     # Initialize extractor
     extractor = VietnameseKeywordExtractor(
-        model_name=MODEL_NAME,
-        output_dir=OUTPUT_DIR
+        model_name=args.model,
+        output_dir=args.output_dir
     )
     
     # Load dataset
-    dataset = extractor.load_dataset(COMMON_VOICE_LANG, COMMON_VOICE_SPLIT)
+    print(f"Loading {args.lang} dataset ({args.split} split)...")
+    dataset = extractor.load_dataset(args.lang, args.split)
     
-    # Process sample
-    valid_segments = extractor.process_sample(SAMPLE_INDEX, dataset)
+    # Process entire dataset (or subset)
+    stats = extractor.process_dataset(dataset, args.max_samples)
     
-    print(f"Extracted {valid_segments} valid KWS segments")
+    # Create syllable subfolders for KWS training
+    print("Organizing extracted keywords for KWS training...")
+    organize_keywords_for_kws(args.output_dir)
+
+
+def organize_keywords_for_kws(base_dir: str) -> None:
+    """Organize extracted keywords into syllable-based folders for KWS training.
+    
+    Args:
+        base_dir: Base directory containing extracted WAV files
+    """
+    # Find all WAV files
+    wav_files = [f for f in os.listdir(base_dir) if f.endswith('.wav')]
+    
+    # Extract unique syllables
+    syllables = set()
+    for filename in wav_files:
+        # Extract syllable from filename (after index prefix)
+        parts = filename.split('_', 1)
+        if len(parts) > 1:
+            syllable = parts[1].split('.')[0]
+            if syllable:
+                syllables.add(syllable)
+    
+    print(f"Found {len(syllables)} unique syllables")
+    
+    # Create syllable directories and copy files
+    for syllable in syllables:
+        # Create directory for syllable
+        syllable_dir = os.path.join(base_dir, "syllables", syllable)
+        os.makedirs(syllable_dir, exist_ok=True)
+        
+        # Count files for this syllable
+        count = 0
+        
+        # Find all files for this syllable
+        for filename in wav_files:
+            if f"_{syllable}." in filename:
+                # Copy or move the file
+                src_path = os.path.join(base_dir, filename)
+                dst_path = os.path.join(syllable_dir, filename)
+                # Just create a symbolic link to save space
+                if not os.path.exists(dst_path):
+                    os.symlink(os.path.abspath(src_path), dst_path)
+                count += 1
+        
+        print(f"Syllable '{syllable}': {count} samples")
 
 
 if __name__ == "__main__":
