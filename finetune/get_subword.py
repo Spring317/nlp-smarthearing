@@ -54,7 +54,8 @@ last_token = None
 for i, token_id in enumerate(pred_ids):
     token = processor.tokenizer.convert_ids_to_tokens([token_id])[0]
     
-    if token == last_token or token in [processor.tokenizer.pad_token, processor.tokenizer.blank_token]:
+    # Fixed condition - check for pad token and other special tokens without using blank_token
+    if token == last_token or token == processor.tokenizer.pad_token or token in ["<pad>", "<s>", "</s>"]:
         continue
 
     end_time = i * frame_duration
