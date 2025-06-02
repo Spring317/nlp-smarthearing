@@ -10,6 +10,11 @@ from tqdm import tqdm
 import argparse
 import pandas as pd
 from utils.get_syllables import extract_syllables
+import shutil
+import numpy as np
+from scipy.signal import resample
+import soundfile as sf
+import random
 
 class VietnameseKeywordExtractor:
     """A class for extracting Vietnamese keywords from audio files."""
@@ -140,13 +145,13 @@ class VietnameseKeywordExtractor:
     def extract_syllable_segments(
         self, 
         waveform: torch.Tensor, 
-# This line of code is checking if the `extractor` object has a method named `get_extracted_keywords`.
         sr: int, 
         syllables: List[str],
         char_tokens: str,
-        chars_per_sec: float
+        chars_per_sec: float,
+        num_chunks: int = 3  # Number of chunks to generate per syllable
     ) -> int:
-        """Extract audio segments for each syllable.
+        """Extract audio segments for each syllable with multiple chunks.
         
         Args:
             waveform: Audio waveform tensor
@@ -154,6 +159,7 @@ class VietnameseKeywordExtractor:
             syllables: List of syllables
             char_tokens: Full character transcription
             chars_per_sec: Characters per second for timing estimation
+            num_chunks: Number of different chunk positions to generate
             
         Returns:
             Number of valid segments extracted
@@ -171,27 +177,46 @@ class VietnameseKeywordExtractor:
                 current_pos += syllable_len
                 continue
             
-            # Calculate start and end samples
-            start_sample = int(current_pos / len(char_tokens) * waveform.shape[1])
-            end_sample = int((current_pos + syllable_len) / len(char_tokens) * waveform.shape[1])
+            # Calculate base start and end samples
+            base_start = int(current_pos / len(char_tokens) * waveform.shape[1])
+            base_end = int((current_pos + syllable_len) / len(char_tokens) * waveform.shape[1])
+            segment_length = base_end - base_start
             
-            # Extract audio segment
-            segment_waveform = waveform[:, start_sample:end_sample]
-            
-            # Clean syllable for filename
-            syllable_clean = re.sub(
-                r'[^\w\sáàảãạăắằẳẵặâấầẩẫậéèẻẽẹêếềểễệíìỉĩịóòỏõọôốồổỗộơớờởỡợúùủũụưứừửữựýỳỷỹỵđ]', 
-                '', syllable
-            )
-            
-            # Save syllable audio
-            file_path = os.path.join(self.output_dir, f"{valid_subwords:03d}_{syllable_clean}.wav")
-            torchaudio.save(file_path, segment_waveform, sample_rate=sr)
-            
-            print(f"Saved: {file_path} | Duration: {syllable_duration:.2f}s | Syllable: {syllable}")
-            valid_subwords += 1
-            current_pos += syllable_len
-            
+            # Generate multiple chunks with different positions
+            for chunk_idx in range(num_chunks):
+                # Calculate random offset within 20% of the segment length
+                max_offset = int(segment_length * 0.2)
+                start_offset = random.randint(-min(max_offset, base_start), max_offset)
+                end_offset = random.randint(-max_offset, max_offset)
+                
+                # Apply offsets to get chunk position
+                chunk_start = max(0, base_start + start_offset)
+                chunk_end = min(waveform.shape[1], base_end + end_offset)
+                
+                # Extract audio segment
+                segment_waveform = waveform[:, chunk_start:chunk_end]
+                
+                # Clean syllable for filename
+                syllable_clean = re.sub(
+                    r'[^\w\sáàảãạăắằẳẵặâấầẩẫậéèẻẽẹêếềểễệíìỉĩịóòỏõọôốồổỗộơớờởỡợúùủũụưứừửữựýỳỷỹỵđ]', 
+                    '', syllable
+                )
+                
+                # Save syllable audio with chunk identifier
+                file_path = os.path.join(
+                    self.output_dir, 
+                    f"{valid_subwords:03d}_{syllable_clean}_chunk{chunk_idx}.wav"
+                )
+                
+                # Only save if the chunk is long enough
+                chunk_duration = (chunk_end - chunk_start) / sr
+                if chunk_duration >= self.min_duration:
+                    torchaudio.save(file_path, segment_waveform, sample_rate=sr)
+                    print(f"Saved: {file_path} | Duration: {chunk_duration:.2f}s | Syllable: {syllable}")
+                    valid_subwords += 1
+        
+        current_pos += syllable_len
+    
         return valid_subwords
     
     def process_dataset(self, dataset: Dataset, max_samples: Optional[int] = None) -> Dict[str, int]:
@@ -253,6 +278,123 @@ class VietnameseKeywordExtractor:
         return stats
 
 
+def apply_augmentation(audio_path: str, out_path: str, sr: int = 16000):
+    """Apply random augmentation to audio file.
+    
+    Args:
+        audio_path: Path to input audio file
+        out_path: Path to save augmented audio
+        sr: Sample rate
+    """
+    # Load audio
+    y, sr = librosa.load(audio_path, sr=sr)
+    
+    # Randomly choose augmentation method
+    aug_type = random.choice(['pitch', 'speed', 'noise', 'shift'])
+    
+    if aug_type == 'pitch':
+        # Pitch shift up or down by 0-2 semitones
+        n_steps = random.uniform(-2, 2)
+        y_aug = librosa.effects.pitch_shift(y, sr=sr, n_steps=n_steps)
+    
+    elif aug_type == 'speed':
+        # Change speed by ±10%
+        speed_factor = random.uniform(0.9, 1.1) 
+        y_aug = librosa.effects.time_stretch(y, rate=speed_factor)
+    
+    elif aug_type == 'noise':
+        # Add small random noise
+        noise_factor = random.uniform(0.001, 0.005)
+        noise = np.random.randn(len(y))
+        y_aug = y + noise_factor * noise
+    
+    else:  # shift
+        # Shift the audio slightly
+        shift_max = int(sr * 0.05)  # max 50ms shift
+        shift = random.randint(-shift_max, shift_max)
+        y_aug = np.roll(y, shift)
+    
+    # Save augmented audio
+    sf.write(out_path, y_aug, sr)
+
+def organize_keywords_for_kws(base_dir: str, train_ratio: float = 0.8, 
+                            target_samples: int = 50) -> None:
+    """Organize extracted keywords into train/test splits with data augmentation.
+    
+    Args:
+        base_dir: Base directory containing extracted WAV files
+        train_ratio: Ratio of samples to use for training
+        target_samples: Target number of samples per class after augmentation
+    """
+    # Create train/test directories
+    train_dir = os.path.join(base_dir, "train")
+    test_dir = os.path.join(base_dir, "test")
+    os.makedirs(train_dir, exist_ok=True)
+    os.makedirs(test_dir, exist_ok=True)
+    
+    # Get all syllables
+    syllables = extract_syllables(base_dir)
+    wav_files = [f for f in os.listdir(base_dir) if f.endswith('.wav')]
+    
+    print("Organizing dataset with augmentation...")
+    
+    for syllable in tqdm(syllables, desc="Processing syllables"):
+        # Create syllable directories in train and test
+        train_syllable_dir = os.path.join(train_dir, syllable)
+        test_syllable_dir = os.path.join(test_dir, syllable)
+        os.makedirs(train_syllable_dir, exist_ok=True)
+        os.makedirs(test_syllable_dir, exist_ok=True)
+        
+        # Find all files for this syllable
+        syllable_files = [f for f in wav_files if f"_{syllable}." in f]
+        num_original = len(syllable_files)
+        
+        if num_original == 0:
+            print(f"Warning: No samples found for syllable '{syllable}'")
+            continue
+            
+        # Randomly split files into train/test
+        random.shuffle(syllable_files)
+        split_idx = int(len(syllable_files) * train_ratio)
+        train_files = syllable_files[:split_idx]
+        test_files = syllable_files[split_idx:]
+        
+        # Copy original files
+        for f in train_files:
+            shutil.copy2(
+                os.path.join(base_dir, f),
+                os.path.join(train_syllable_dir, f)
+            )
+        
+        for f in test_files:
+            shutil.copy2(
+                os.path.join(base_dir, f),
+                os.path.join(test_syllable_dir, f)
+            )
+            
+        # Calculate how many augmented samples we need
+        train_augment_needed = max(0, target_samples - len(train_files))
+        
+        # Generate augmented samples if needed
+        if train_augment_needed > 0:
+            print(f"Generating {train_augment_needed} augmented samples for {syllable}")
+            
+            for i in range(train_augment_needed):
+                # Randomly select a source file
+                source_file = random.choice(train_files)
+                source_path = os.path.join(base_dir, source_file)
+                
+                # Create augmented version
+                aug_filename = f"aug_{i}_{source_file}"
+                aug_path = os.path.join(train_syllable_dir, aug_filename)
+                
+                apply_augmentation(source_path, aug_path)
+        
+        # Print statistics
+        num_train = len(os.listdir(train_syllable_dir))
+        num_test = len(os.listdir(test_syllable_dir))
+        print(f"Syllable '{syllable}': {num_original} original, {num_train} train, {num_test} test")
+
 def main() -> None:
     """Main function to extract Vietnamese keywords."""
     # Parse command-line arguments
@@ -275,42 +417,12 @@ def main() -> None:
     print(f"Loading {args.lang} dataset ({args.split} split)...")
     dataset = extractor.load_dataset(args.lang, args.split)
     
-    # Process entire dataset (or subset)
+    # Process dataset with multiple chunks per syllable
     stats = extractor.process_dataset(dataset, args.max_samples)
     
-    # Create syllable subfolders for KWS training
+    # Organize dataset with augmentation and train/test split
     print("Organizing extracted keywords for KWS training...")
-    organize_keywords_for_kws(args.output_dir)
-
-
-def organize_keywords_for_kws(base_dir: str) -> None:
-    """Organize extracted keywords into syllable-based folders for KWS training.
-    
-    Args:
-        base_dir: Base directory containing extracted WAV files
-    """
-    syllables = extract_syllables(base_dir)
-    # Create syllable directories and copy files
-    for syllable in syllables:
-        # Create directory for syllable
-        syllable_dir = os.path.join(base_dir, "syllables", syllable)
-        os.makedirs(syllable_dir, exist_ok=True)
-        
-        # Count files for this syllable
-        count = 0
-        
-        # Find all files for this syllable
-        for filename in wav_files:
-            if f"_{syllable}." in filename:
-                # Copy or move the file
-                src_path = os.path.join(base_dir, filename)
-                dst_path = os.path.join(syllable_dir, filename)
-                # Just create a symbolic link to save space
-                if not os.path.exists(dst_path):
-                    os.symlink(os.path.abspath(src_path), dst_path)
-                count += 1
-        
-        print(f"Syllable '{syllable}': {count} samples")
+    organize_keywords_for_kws(args.output_dir, train_ratio=0.8, target_samples=50)
 
 
 if __name__ == "__main__":
