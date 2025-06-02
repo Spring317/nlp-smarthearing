@@ -114,13 +114,7 @@ def extract_mfcc_features(audio_file, sample_rate=16000, n_mfcc=10, n_frames=49)
 
 
 def load_weights_from_cpp_model(model, weights_file=None):
-    """
-    Load weights from the C++ model's weight definitions
-    
-    Args:
-        model: PyTorch DS_CNN_KWS model instance
-        weights_file: Not used, kept for backward compatibility
-    """
+    """Load weights from the C++ model's weight definitions"""
     import re
     
     def parse_weight_string(weight_str):
@@ -189,12 +183,32 @@ def load_weights_from_cpp_model(model, weights_file=None):
         conv.pointwise.weight.data = pw_wt
         conv.pointwise.bias.data = torch.tensor([q7_to_float(w) for w in weights[f'conv{i}_pw_bias']])
     
-    # Final FC layer
+    # Final FC layer 
     fc_wt = torch.tensor([q7_to_float(w) for w in weights['final_fc_wt']])
-    fc_wt = fc_wt.reshape(model.num_classes, -1)  # [out_features, in_features]
-    model.fc.weight.data = fc_wt
-    model.fc.bias.data = torch.tensor([q7_to_float(w) for w in weights['final_fc_bias']])
     
+    # Check if number of weights matches expected size
+    expected_size = model.num_classes * model._fc_in_features
+    actual_size = len(fc_wt)
+    
+    if actual_size != expected_size:
+        print(f"Warning: FC weight size mismatch!")
+        print(f"Expected size: {expected_size} (num_classes={model.num_classes} * in_features={model._fc_in_features})")
+        print(f"Actual size from weights file: {actual_size}")
+        print("Using default PyTorch initialization for FC layer")
+        return
+        
+    # Only reshape if sizes match
+    fc_wt = fc_wt.reshape(model.num_classes, model._fc_in_features)
+    model.fc.weight.data = fc_wt
+    
+    # Only load bias if number of classes matches
+    fc_bias = torch.tensor([q7_to_float(w) for w in weights['final_fc_bias']])
+    if len(fc_bias) == model.num_classes:
+        model.fc.bias.data = fc_bias
+    else:
+        print(f"Warning: FC bias size mismatch ({len(fc_bias)} != {model.num_classes})")
+        print("Using default PyTorch initialization for FC bias")
+
     print("Loaded weights from C++ model")
 def get_keyword_labels():
     label = extract_syllables("kws_segments")
