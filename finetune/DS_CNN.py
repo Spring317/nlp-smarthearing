@@ -41,10 +41,13 @@ class DS_CNN_KWS(nn.Module):
     def __init__(self, num_classes=12, num_mfcc=10, num_frames=49):
         super(DS_CNN_KWS, self).__init__()
         
-        # Keep existing model architecture
         self.num_mfcc_features = num_mfcc 
         self.num_frames = num_frames
         self.num_classes = num_classes
+        
+        # Calculate output dimensions after CONV1
+        h_out = (num_mfcc + 2 - 4) // 2 + 1  # After padding=(1,4) and stride=(2,2)
+        w_out = (num_frames + 8 - 10) // 2 + 1
         
         # CONV1: Regular Convolution
         self.conv1 = nn.Conv2d(
@@ -59,28 +62,30 @@ class DS_CNN_KWS(nn.Module):
         self.conv5 = DepthwiseSeparableConv2d(64, 64, kernel_size=3, stride=1, padding=1)
         
         # Calculate flattened features size
-        self._fc_in_features = 64 * 5 * 25  # From conv output shape
+        self._fc_in_features = 64 * h_out * w_out
         
-        # Final FC layer with correct dimensions
+        # Final FC layer
         self.fc = nn.Linear(self._fc_in_features, num_classes)
     
     def forward(self, x):
         # Debug shape transformations
         batch_size = x.size(0)
         
-        x = self.conv1(x)  # Shape: (batch, 64, 5, 25)
+        x = self.conv1(x)
         x = F.relu(x)
         
-        x = self.conv2(x)  # Shape maintained
-        x = self.conv3(x)  # Shape maintained
-        x = self.conv4(x)  # Shape maintained  
-        x = self.conv5(x)  # Shape maintained
+        x = self.conv2(x)
+        x = self.conv3(x)
+        x = self.conv4(x)
+        x = self.conv5(x)
         
         # Flatten preserving batch dimension
-        x = x.view(batch_size, -1)  # Shape: (batch, 64*5*25)
+        x = x.view(batch_size, -1)
         
-        x = self.fc(x)  # Shape: (batch, num_classes)
+        # Add debug print to verify shape
+        print(f"Shape before FC layer: {x.shape}")
         
+        x = self.fc(x)
         return x
 
 
@@ -256,14 +261,17 @@ def predict_keyword(model, audio_file, keyword_labels):
 
 
 def main():
-    # Create model
-    labels = get_keyword_labels()
-    NUM_CLASSES = len(labels) 
+    # Create model with original number of classes
+    NUM_CLASSES = 12  # Match C++ model's OUT_DIM
     model = DS_CNN_KWS(num_classes=NUM_CLASSES)
     print("DS-CNN KWS model created")
     
-    # Load weights if available
+    # Load weights
     load_weights_from_cpp_model(model)
+    
+    # Get labels for display purposes
+    labels = get_keyword_labels()
+    print(f"Number of available labels: {len(labels)}")
     
     # Example usage
     print("Model architecture:")
