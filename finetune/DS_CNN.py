@@ -135,7 +135,7 @@ def load_weights_from_cpp_model(model, weights_file=None):
         return float(q7_value) / (2**7)
     
     # Read the weights file
-    with open('Hello_edge/src/ds_cnn_weights.h', 'r') as f:
+    with open('../Hello_edge/src/ds_cnn_weights.h', 'r') as f:
         weights_content = f.read()
     
     # Extract weights using regex
