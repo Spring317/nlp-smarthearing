@@ -318,13 +318,14 @@ def apply_augmentation(audio_path: str, out_path: str, sr: int = 16000):
     sf.write(out_path, y_aug, sr)
 
 def organize_keywords_for_kws(base_dir: str, train_ratio: float = 0.8, 
-                            target_samples: int = 50) -> None:
+                            target_samples: int = 50, cleanup: bool = True) -> None:
     """Organize extracted keywords into train/test splits with data augmentation.
     
     Args:
         base_dir: Base directory containing extracted WAV files
         train_ratio: Ratio of samples to use for training
         target_samples: Target number of samples per class after augmentation
+        cleanup: Whether to remove original audio chunks after organizing
     """
     # Create train/test directories
     train_dir = os.path.join(base_dir, "train")
@@ -337,6 +338,9 @@ def organize_keywords_for_kws(base_dir: str, train_ratio: float = 0.8,
     wav_files = [f for f in os.listdir(base_dir) if f.endswith('.wav')]
     
     print("Organizing dataset with augmentation...")
+    
+    # Keep track of processed files for cleanup
+    processed_files = set()
     
     for syllable in tqdm(syllables, desc="Processing syllables"):
         # Create syllable directories in train and test
@@ -362,18 +366,20 @@ def organize_keywords_for_kws(base_dir: str, train_ratio: float = 0.8,
         train_files = syllable_files[:split_idx]
         test_files = syllable_files[split_idx:]
         
-        # Copy original files
+        # Copy original files and track them
         for f in train_files:
             shutil.copy2(
                 os.path.join(base_dir, f),
                 os.path.join(train_syllable_dir, f)
             )
+            processed_files.add(f)
         
         for f in test_files:
             shutil.copy2(
                 os.path.join(base_dir, f),
                 os.path.join(test_syllable_dir, f)
             )
+            processed_files.add(f)
             
         # Calculate how many augmented samples we need
         train_augment_needed = max(0, target_samples - len(train_files))
@@ -404,6 +410,25 @@ def organize_keywords_for_kws(base_dir: str, train_ratio: float = 0.8,
         num_train = len(os.listdir(train_syllable_dir))
         num_test = len(os.listdir(test_syllable_dir))
         print(f"Syllable '{syllable}': {num_original} original, {num_train} train, {num_test} test")
+    
+    # Cleanup original audio chunks
+    if cleanup:
+        print("\nCleaning up original audio chunks...")
+        for f in tqdm(processed_files, desc="Removing original files"):
+            try:
+                os.remove(os.path.join(base_dir, f))
+            except Exception as e:
+                print(f"Warning: Failed to remove {f}: {e}")
+        
+        # Remove empty directories if any
+        for root, dirs, files in os.walk(base_dir, topdown=False):
+            for d in dirs:
+                try:
+                    dir_path = os.path.join(root, d)
+                    if not os.listdir(dir_path):  # if directory is empty
+                        os.rmdir(dir_path)
+                except Exception as e:
+                    print(f"Warning: Failed to remove empty directory {d}: {e}")
 
 def main() -> None:
     """Main function to extract Vietnamese keywords."""
@@ -430,9 +455,9 @@ def main() -> None:
     # Process dataset with multiple chunks per syllable
     stats = extractor.process_dataset(dataset, args.max_samples)
     
-    # Organize dataset with augmentation and train/test split
+    # Organize dataset with augmentation and train/test split, then cleanup
     print("Organizing extracted keywords for KWS training...")
-    organize_keywords_for_kws(args.output_dir, train_ratio=0.8, target_samples=50)
+    organize_keywords_for_kws(args.output_dir, train_ratio=0.8, target_samples=50, cleanup=True)
 
 
 if __name__ == "__main__":
