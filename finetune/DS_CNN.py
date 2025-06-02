@@ -131,7 +131,7 @@ def load_weights_from_cpp_model(model, weights_file=None):
     # Convert fixed-point weights to floating point if needed
     # (Original model uses fixed-point Q7 format)
 def get_keyword_labels():
-    label = extract_syllables("kws_segment")
+    label = extract_syllables("kws_segments")
     return label
 
 
