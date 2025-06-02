@@ -353,9 +353,12 @@ def organize_keywords_for_kws(base_dir: str, train_ratio: float = 0.8,
             print(f"Warning: No samples found for syllable '{syllable}'")
             continue
             
+        # Ensure at least one sample for training
+        min_train_samples = min(1, num_original)
+        split_idx = max(min_train_samples, int(len(syllable_files) * train_ratio))
+        
         # Randomly split files into train/test
         random.shuffle(syllable_files)
-        split_idx = int(len(syllable_files) * train_ratio)
         train_files = syllable_files[:split_idx]
         test_files = syllable_files[split_idx:]
         
@@ -375,20 +378,27 @@ def organize_keywords_for_kws(base_dir: str, train_ratio: float = 0.8,
         # Calculate how many augmented samples we need
         train_augment_needed = max(0, target_samples - len(train_files))
         
-        # Generate augmented samples if needed
-        if train_augment_needed > 0:
+        # Generate augmented samples if needed and if we have training files
+        if train_augment_needed > 0 and len(train_files) > 0:
             print(f"Generating {train_augment_needed} augmented samples for {syllable}")
             
+            # Calculate how many augmentations per original file
+            augs_per_file = train_augment_needed // len(train_files) + 1
+            
             for i in range(train_augment_needed):
-                # Randomly select a source file
-                source_file = random.choice(train_files)
+                # Select source file by rotating through available files
+                source_file = train_files[i % len(train_files)]
                 source_path = os.path.join(base_dir, source_file)
                 
-                # Create augmented version
+                # Create augmented version with unique identifier
                 aug_filename = f"aug_{i}_{source_file}"
                 aug_path = os.path.join(train_syllable_dir, aug_filename)
                 
-                apply_augmentation(source_path, aug_path)
+                try:
+                    apply_augmentation(source_path, aug_path)
+                except Exception as e:
+                    print(f"Warning: Failed to augment {source_file}: {e}")
+                    continue
         
         # Print statistics
         num_train = len(os.listdir(train_syllable_dir))
