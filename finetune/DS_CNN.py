@@ -118,8 +118,8 @@ def extract_mfcc_features(audio_file, sample_rate=16000, n_mfcc=10, n_frames=49)
     return mfccs
 
 
-def load_weights_from_cpp_model(model, weights_file=None):
-    """Load weights from the C++ model's weight definitions"""
+def load_weights_from_cpp_model(model, weights_file=None, skip_fc=True):
+    """Load weights from the C++ model's weight definitions, optionally skipping FC layer"""
     import re
     
     def parse_weight_string(weight_str):
@@ -188,6 +188,11 @@ def load_weights_from_cpp_model(model, weights_file=None):
         conv.pointwise.weight.data = pw_wt
         conv.pointwise.bias.data = torch.tensor([q7_to_float(w) for w in weights[f'conv{i}_pw_bias']])
     
+    # Skip loading FC layer weights if skip_fc is True
+    if skip_fc:
+        print("Skipping FC layer weights - using PyTorch initialization")
+        return
+        
     # Final FC layer 
     fc_wt = torch.tensor([q7_to_float(w) for w in weights['final_fc_wt']])
     
@@ -261,16 +266,18 @@ def predict_keyword(model, audio_file, keyword_labels):
 
 
 def main():
-    # Create model with original number of classes
-    NUM_CLASSES = 12  # Match C++ model's OUT_DIM
+    # Get labels first to determine number of classes
+    labels = get_keyword_labels()
+    NUM_CLASSES = len(labels)
+    print(f"Creating model with {NUM_CLASSES} classes based on dataset")
+    
+    # Create model with dataset's number of classes
     model = DS_CNN_KWS(num_classes=NUM_CLASSES)
     print("DS-CNN KWS model created")
     
-    # Load weights
-    load_weights_from_cpp_model(model)
+    # Load weights but skip FC layer
+    load_weights_from_cpp_model(model, skip_fc=True)
     
-    # Get labels for display purposes
-    labels = get_keyword_labels()
     print(f"Number of available labels: {len(labels)}")
     
     # Example usage
@@ -286,7 +293,6 @@ def main():
         print(f"Output shape: {example_output.shape}")
         
     print("\nModel is ready for keyword spotting!")
-
 
 if __name__ == "__main__":
     main()
