@@ -318,117 +318,120 @@ def apply_augmentation(audio_path: str, out_path: str, sr: int = 16000):
     sf.write(out_path, y_aug, sr)
 
 def organize_keywords_for_kws(base_dir: str, train_ratio: float = 0.8, 
-                            target_samples: int = 50, cleanup: bool = True) -> None:
-    """Organize extracted keywords into train/test splits with data augmentation.
-    
-    Args:
-        base_dir: Base directory containing extracted WAV files
-        train_ratio: Ratio of samples to use for training
-        target_samples: Target number of samples per class after augmentation
-        cleanup: Whether to remove original audio chunks after organizing
-    """
-    # Create train/test directories
-    train_dir = os.path.join(base_dir, "train")
-    test_dir = os.path.join(base_dir, "test")
-    os.makedirs(train_dir, exist_ok=True)
-    os.makedirs(test_dir, exist_ok=True)
-    
-    # Get all syllables
+                            target_samples: int = 50) -> None:
+    """Create metadata file for train/test splits instead of copying files."""
+    # Get all syllables and wav files
     syllables = extract_syllables(base_dir)
     wav_files = [f for f in os.listdir(base_dir) if f.endswith('.wav')]
     
-    print("Organizing dataset with augmentation...")
+    print("Creating dataset splits metadata...")
     
-    # Keep track of processed files for cleanup
-    processed_files = set()
+    # Initialize metadata dictionary
+    metadata = {
+        'train': [],
+        'test': [],
+        'statistics': {}
+    }
     
     for syllable in tqdm(syllables, desc="Processing syllables"):
-        # Create syllable directories in train and test
-        train_syllable_dir = os.path.join(train_dir, syllable)
-        test_syllable_dir = os.path.join(test_dir, syllable)
-        os.makedirs(train_syllable_dir, exist_ok=True)
-        os.makedirs(test_syllable_dir, exist_ok=True)
-        
         # Find all files for this syllable
         syllable_files = [f for f in wav_files if f"_{syllable}." in f]
         num_original = len(syllable_files)
         
         if num_original == 0:
-            print(f"Warning: No samples found for syllable '{syllable}'")
             continue
             
-        # Ensure at least one sample for training
+        # Split files into train/test
         min_train_samples = min(1, num_original)
         split_idx = max(min_train_samples, int(len(syllable_files) * train_ratio))
-        
-        # Randomly split files into train/test
         random.shuffle(syllable_files)
         train_files = syllable_files[:split_idx]
         test_files = syllable_files[split_idx:]
         
-        # Copy original files and track them
+        # Add to metadata
         for f in train_files:
-            shutil.copy2(
-                os.path.join(base_dir, f),
-                os.path.join(train_syllable_dir, f)
-            )
-            processed_files.add(f)
-        
+            metadata['train'].append({
+                'file': f,
+                'path': os.path.join(base_dir, f),
+                'syllable': syllable,
+                'split': 'train',
+                'augmented': False
+            })
+            
         for f in test_files:
-            shutil.copy2(
-                os.path.join(base_dir, f),
-                os.path.join(test_syllable_dir, f)
-            )
-            processed_files.add(f)
+            metadata['test'].append({
+                'file': f,
+                'path': os.path.join(base_dir, f),
+                'syllable': syllable,
+                'split': 'test',
+                'augmented': False
+            })
             
-        # Calculate how many augmented samples we need
+        # Generate augmented sample entries if needed
         train_augment_needed = max(0, target_samples - len(train_files))
-        
-        # Generate augmented samples if needed and if we have training files
         if train_augment_needed > 0 and len(train_files) > 0:
-            print(f"Generating {train_augment_needed} augmented samples for {syllable}")
-            
-            # Calculate how many augmentations per original file
-            augs_per_file = train_augment_needed // len(train_files) + 1
-            
             for i in range(train_augment_needed):
                 # Select source file by rotating through available files
                 source_file = train_files[i % len(train_files)]
-                source_path = os.path.join(base_dir, source_file)
-                
-                # Create augmented version with unique identifier
                 aug_filename = f"aug_{i}_{source_file}"
-                aug_path = os.path.join(train_syllable_dir, aug_filename)
                 
-                try:
-                    apply_augmentation(source_path, aug_path)
-                except Exception as e:
-                    print(f"Warning: Failed to augment {source_file}: {e}")
-                    continue
+                metadata['train'].append({
+                    'file': aug_filename,
+                    'original_file': source_file,
+                    'path': os.path.join(base_dir, source_file),
+                    'syllable': syllable,
+                    'split': 'train',
+                    'augmented': True,
+                    'aug_index': i
+                })
         
-        # Print statistics
-        num_train = len(os.listdir(train_syllable_dir))
-        num_test = len(os.listdir(test_syllable_dir))
-        print(f"Syllable '{syllable}': {num_original} original, {num_train} train, {num_test} test")
+        # Add statistics
+        metadata['statistics'][syllable] = {
+            'num_original': num_original,
+            'num_train': len(train_files),
+            'num_test': len(test_files),
+            'num_augmented': train_augment_needed if train_augment_needed > 0 else 0
+        }
+        
+        print(f"Syllable '{syllable}': {num_original} original, "
+              f"{len(train_files)} train, {len(test_files)} test, "
+              f"{train_augment_needed if train_augment_needed > 0 else 0} augmented")
     
-    # Cleanup original audio chunks
-    if cleanup:
-        print("\nCleaning up original audio chunks...")
-        for f in tqdm(processed_files, desc="Removing original files"):
-            try:
-                os.remove(os.path.join(base_dir, f))
-            except Exception as e:
-                print(f"Warning: Failed to remove {f}: {e}")
-        
-        # Remove empty directories if any
-        for root, dirs, files in os.walk(base_dir, topdown=False):
-            for d in dirs:
-                try:
-                    dir_path = os.path.join(root, d)
-                    if not os.listdir(dir_path):  # if directory is empty
-                        os.rmdir(dir_path)
-                except Exception as e:
-                    print(f"Warning: Failed to remove empty directory {d}: {e}")
+    # Save metadata to JSON
+    import json
+    metadata_path = os.path.join(base_dir, 'splits_metadata.json')
+    with open(metadata_path, 'w', encoding='utf-8') as f:
+        json.dump(metadata, f, ensure_ascii=False, indent=2)
+    
+    print(f"\nMetadata saved to: {metadata_path}")
+    
+    # Create CSV files for easier loading
+    import pandas as pd
+    
+    # Train split
+    train_df = pd.DataFrame(metadata['train'])
+    train_df.to_csv(os.path.join(base_dir, 'train_metadata.csv'), index=False)
+    
+    # Test split
+    test_df = pd.DataFrame(metadata['test'])
+    test_df.to_csv(os.path.join(base_dir, 'test_metadata.csv'), index=False)
+    
+    print("Created CSV files: train_metadata.csv, test_metadata.csv")
+
+def load_dataset_split(base_dir: str, split: str = 'train'):
+    """Load dataset split using metadata."""
+    metadata_path = os.path.join(base_dir, f'{split}_metadata.csv')
+    df = pd.read_csv(metadata_path)
+    
+    # If this is training data, handle augmentation
+    if split == 'train':
+        augmented_samples = df[df['augmented'] == True]
+        for _, row in augmented_samples.iterrows():
+            # Apply augmentation when loading
+            if not os.path.exists(row['file']):
+                apply_augmentation(row['path'], row['file'])
+    
+    return df
 
 def main() -> None:
     """Main function to extract Vietnamese keywords."""
