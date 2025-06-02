@@ -41,45 +41,45 @@ class DS_CNN_KWS(nn.Module):
     def __init__(self, num_classes=12, num_mfcc=10, num_frames=49):
         super(DS_CNN_KWS, self).__init__()
         
-        # Define dimensions based on ds_cnn.h file
-        self.num_mfcc_features = num_mfcc  # NUM_MFCC_COEFFS
-        self.num_frames = num_frames       # NUM_FRAMES
-        self.num_classes = num_classes     # OUT_DIM
+        # Keep existing model architecture
+        self.num_mfcc_features = num_mfcc 
+        self.num_frames = num_frames
+        self.num_classes = num_classes
         
-        # CONV1: Regular Convolution (matches CONV1 parameters in ds_cnn.h)
+        # CONV1: Regular Convolution
         self.conv1 = nn.Conv2d(
             1, 64, kernel_size=(4, 10), 
             stride=(2, 2), padding=(1, 4), bias=True
         )
         
-        # CONV2-5: Depthwise Separable Convolutions
-        # Parameters match the definitions in ds_cnn.h
+        # CONV2-5: Depthwise Separable Convolutions 
         self.conv2 = DepthwiseSeparableConv2d(64, 64, kernel_size=3, stride=1, padding=1)
         self.conv3 = DepthwiseSeparableConv2d(64, 64, kernel_size=3, stride=1, padding=1)
         self.conv4 = DepthwiseSeparableConv2d(64, 64, kernel_size=3, stride=1, padding=1)
         self.conv5 = DepthwiseSeparableConv2d(64, 64, kernel_size=3, stride=1, padding=1)
         
-        # Final fully connected layer (matches FINAL_FC in ds_cnn.cpp)
-        self.fc = nn.Linear(64 * 5 * 25, num_classes)
+        # Calculate flattened features size
+        self._fc_in_features = 64 * 5 * 25  # From conv output shape
+        
+        # Final FC layer with correct dimensions
+        self.fc = nn.Linear(self._fc_in_features, num_classes)
     
     def forward(self, x):
-        # x expected to be [batch, 1, num_mfcc, num_frames]
+        # Debug shape transformations
+        batch_size = x.size(0)
         
-        # CONV1
-        x = self.conv1(x)
+        x = self.conv1(x)  # Shape: (batch, 64, 5, 25)
         x = F.relu(x)
         
-        # CONV2-5 (depthwise separable convolutions)
-        x = self.conv2(x)
-        x = self.conv3(x)
-        x = self.conv4(x)
-        x = self.conv5(x)
+        x = self.conv2(x)  # Shape maintained
+        x = self.conv3(x)  # Shape maintained
+        x = self.conv4(x)  # Shape maintained  
+        x = self.conv5(x)  # Shape maintained
         
-        # Flatten for FC layer
-        x = torch.flatten(x, start_dim=1)
+        # Flatten preserving batch dimension
+        x = x.view(batch_size, -1)  # Shape: (batch, 64*5*25)
         
-        # FC layer
-        x = self.fc(x)
+        x = self.fc(x)  # Shape: (batch, num_classes)
         
         return x
 
@@ -115,21 +115,87 @@ def extract_mfcc_features(audio_file, sample_rate=16000, n_mfcc=10, n_frames=49)
 
 def load_weights_from_cpp_model(model, weights_file=None):
     """
-    Load weights from the C++ model
+    Load weights from the C++ model's weight definitions
     
     Args:
         model: PyTorch DS_CNN_KWS model instance
-        weights_file: Path to weights file if available
+        weights_file: Not used, kept for backward compatibility
     """
-    if weights_file:
-        # Load weights from file (implementation needed)
-        pass
-    else:
-        # For now, we're just initializing with PyTorch's default initialization
-        print("Using default PyTorch weight initialization")
+    import re
+    
+    def parse_weight_string(weight_str):
+        # Remove curly braces and split by comma
+        values = weight_str.strip('{}').split(',')
+        # Convert to integers
+        return [int(x.strip()) for x in values if x.strip()]
+    
+    def q7_to_float(q7_value):
+        # Convert Q7 fixed-point to float
+        # Q7 format has 7 fractional bits
+        return float(q7_value) / (2**7)
+    
+    # Read the weights file
+    with open('Hello_edge/src/ds_cnn_weights.h', 'r') as f:
+        weights_content = f.read()
+    
+    # Extract weights using regex
+    weight_patterns = {
+        'conv1_wt': 'CONV1_WT\s*{\s*([-0-9,\s]+)}',
+        'conv1_bias': 'CONV1_BIAS\s*{\s*([-0-9,\s]+)}',
+        'conv2_ds_wt': 'CONV2_DS_WT\s*{\s*([-0-9,\s]+)}',
+        'conv2_ds_bias': 'CONV2_DS_BIAS\s*{\s*([-0-9,\s]+)}',
+        'conv2_pw_wt': 'CONV2_PW_WT\s*{\s*([-0-9,\s]+)}',
+        'conv2_pw_bias': 'CONV2_PW_BIAS\s*{\s*([-0-9,\s]+)}',
+        'conv3_ds_wt': 'CONV3_DS_WT\s*{\s*([-0-9,\s]+)}',
+        'conv3_ds_bias': 'CONV3_DS_BIAS\s*{\s*([-0-9,\s]+)}',
+        'conv3_pw_wt': 'CONV3_PW_WT\s*{\s*([-0-9,\s]+)}',
+        'conv3_pw_bias': 'CONV3_PW_BIAS\s*{\s*([-0-9,\s]+)}',
+        'conv4_ds_wt': 'CONV4_DS_WT\s*{\s*([-0-9,\s]+)}',
+        'conv4_ds_bias': 'CONV4_DS_BIAS\s*{\s*([-0-9,\s]+)}',
+        'conv4_pw_wt': 'CONV4_PW_WT\s*{\s*([-0-9,\s]+)}',
+        'conv4_pw_bias': 'CONV4_PW_BIAS\s*{\s*([-0-9,\s]+)}',
+        'conv5_ds_wt': 'CONV5_DS_WT\s*{\s*([-0-9,\s]+)}',
+        'conv5_ds_bias': 'CONV5_DS_BIAS\s*{\s*([-0-9,\s]+)}',
+        'conv5_pw_wt': 'CONV5_PW_WT\s*{\s*([-0-9,\s]+)}',
+        'conv5_pw_bias': 'CONV5_PW_BIAS\s*{\s*([-0-9,\s]+)}',
+        'final_fc_wt': 'FINAL_FC_WT\s*{\s*([-0-9,\s]+)}',
+        'final_fc_bias': 'FINAL_FC_BIAS\s*{\s*([-0-9,\s]+)}'
+    }
+    
+    weights = {}
+    for name, pattern in weight_patterns.items():
+        match = re.search(pattern, weights_content)
+        if match:
+            weights[name] = parse_weight_string(match.group(1))
+    
+    # Convert weights to PyTorch tensors and load into model
+    # CONV1
+    conv1_wt = torch.tensor([q7_to_float(w) for w in weights['conv1_wt']])
+    conv1_wt = conv1_wt.reshape(64, 1, 4, 10)  # [out_ch, in_ch, kx, ky]
+    model.conv1.weight.data = conv1_wt
+    model.conv1.bias.data = torch.tensor([q7_to_float(w) for w in weights['conv1_bias']])
+    
+    # CONV2-5
+    for i, conv in enumerate([model.conv2, model.conv3, model.conv4, model.conv5], 2):
+        # Depthwise weights
+        ds_wt = torch.tensor([q7_to_float(w) for w in weights[f'conv{i}_ds_wt']])
+        ds_wt = ds_wt.reshape(64, 1, 3, 3)  # [out_ch, in_ch/groups, kx, ky]
+        conv.depthwise.weight.data = ds_wt
+        conv.depthwise.bias.data = torch.tensor([q7_to_float(w) for w in weights[f'conv{i}_ds_bias']])
         
-    # Convert fixed-point weights to floating point if needed
-    # (Original model uses fixed-point Q7 format)
+        # Pointwise weights
+        pw_wt = torch.tensor([q7_to_float(w) for w in weights[f'conv{i}_pw_wt']])
+        pw_wt = pw_wt.reshape(64, 64, 1, 1)  # [out_ch, in_ch, 1, 1]
+        conv.pointwise.weight.data = pw_wt
+        conv.pointwise.bias.data = torch.tensor([q7_to_float(w) for w in weights[f'conv{i}_pw_bias']])
+    
+    # Final FC layer
+    fc_wt = torch.tensor([q7_to_float(w) for w in weights['final_fc_wt']])
+    fc_wt = fc_wt.reshape(model.num_classes, -1)  # [out_features, in_features]
+    model.fc.weight.data = fc_wt
+    model.fc.bias.data = torch.tensor([q7_to_float(w) for w in weights['final_fc_bias']])
+    
+    print("Loaded weights from C++ model")
 def get_keyword_labels():
     label = extract_syllables("kws_segments")
     return label
@@ -177,7 +243,6 @@ def predict_keyword(model, audio_file, keyword_labels):
 
 def main():
     # Create model
-    
     labels = get_keyword_labels()
     NUM_CLASSES = len(labels) 
     model = DS_CNN_KWS(num_classes=NUM_CLASSES)
@@ -190,13 +255,14 @@ def main():
     print("Model architecture:")
     print(model)
     
-    # Example input tensor to verify shapes
-    example_input = torch.randn(1, 1, 10, 49)  # batch_size, channels, num_mfcc, num_frames
+    # Example input with debug prints
+    example_input = torch.randn(1, 1, 10, 49)
+    print(f"\nInput shape: {example_input.shape}")
+    
     with torch.no_grad():
         example_output = model(example_input)
-    print(f"\nInput shape: {example_input.shape}")
-    print(f"Output shape: {example_output.shape}")
-    
+        print(f"Output shape: {example_output.shape}")
+        
     print("\nModel is ready for keyword spotting!")
 
 
