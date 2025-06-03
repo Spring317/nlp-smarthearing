@@ -89,31 +89,28 @@ class DS_CNN_KWS(nn.Module):
         return x
 
 
-def extract_mfcc_features(audio_file, sample_rate=16000, n_mfcc=10, n_frames=49):
-    """Extract MFCC features from audio file, matching the C++ implementation"""
+def extract_mfcc_features(audio_file, n_mfcc=40, n_fft=2048, hop_length=512):
+    """Extract MFCC features from an audio file with dynamic FFT size handling."""
+    import librosa
+    import numpy as np
     
-    # Load audio file
-    y, sr = librosa.load(audio_file, sr=sample_rate)
+    # Load the audio file
+    y, sr = librosa.load(audio_file, sr=None)
     
-    # Parameters from ds_cnn.h
-    frame_len_ms = 40
-    frame_shift_ms = 20
-    frame_len = int(sample_rate * frame_len_ms / 1000)
-    frame_shift = int(sample_rate * frame_shift_ms / 1000)
+    # If audio is shorter than n_fft, adjust the n_fft size
+    if len(y) < n_fft:
+        # Set n_fft to the next power of 2 above the signal length
+        n_fft = 2**int(np.ceil(np.log2(len(y))))
+        # Make sure it's at least 512 (or another reasonable minimum)
+        n_fft = max(512, n_fft)
+        # Also adjust hop_length if necessary
+        hop_length = min(hop_length, n_fft // 4)
     
-    # Extract MFCC features (set parameters to match the C++ implementation)
-    mfccs = librosa.feature.mfcc(
-        y=y, sr=sr, n_mfcc=n_mfcc,
-        n_fft=frame_len, hop_length=frame_shift,
-        window='hann'
-    )
+    # Extract MFCCs with adjusted parameters
+    mfccs = librosa.feature.mfcc(y=y, sr=sr, n_mfcc=n_mfcc, n_fft=n_fft, hop_length=hop_length)
     
-    # Pad or truncate to get the expected number of frames
-    if mfccs.shape[1] < n_frames:
-        pad_width = n_frames - mfccs.shape[1]
-        mfccs = np.pad(mfccs, ((0, 0), (0, pad_width)))
-    elif mfccs.shape[1] > n_frames:
-        mfccs = mfccs[:, :n_frames]
+    # Get the right shape for the model (time, features)
+    mfccs = mfccs.T
     
     return mfccs
 
