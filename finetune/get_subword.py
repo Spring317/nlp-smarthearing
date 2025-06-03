@@ -286,6 +286,19 @@ def apply_augmentation(audio_path: str, out_path: str, sr: int = 16000):
         out_path: Path to save augmented audio
         sr: Sample rate
     """
+    # Ensure the directory exists
+    os.makedirs(os.path.dirname(os.path.abspath(out_path)), exist_ok=True)
+    
+    # Sanitize output filename - replace non-ASCII characters
+    sanitized_path = out_path
+    if not all(ord(c) < 128 for c in out_path):
+        # Replace non-ASCII characters with ASCII equivalents
+        import unicodedata
+        sanitized_name = unicodedata.normalize('NFKD', os.path.basename(out_path))
+        sanitized_name = ''.join([c for c in sanitized_name if not unicodedata.combining(c)])
+        sanitized_name = ''.join([c if ord(c) < 128 else '_' for c in sanitized_name])
+        sanitized_path = os.path.join(os.path.dirname(out_path), sanitized_name)
+    
     # Load audio
     y, sr = librosa.load(audio_path, sr=sr)
     
@@ -315,7 +328,11 @@ def apply_augmentation(audio_path: str, out_path: str, sr: int = 16000):
         y_aug = np.roll(y, shift)
     
     # Save augmented audio
-    sf.write(out_path, y_aug, sr)
+    sf.write(sanitized_path, y_aug, sr)
+    
+    # If we sanitized the path, inform the user
+    if sanitized_path != out_path:
+        print(f"Saved augmented audio to sanitized filename: {sanitized_path} (original: {out_path})")
 
 def organize_keywords_for_kws(base_dir: str, train_ratio: float = 0.8, 
                             target_samples: int = 50) -> None:
@@ -420,18 +437,24 @@ def organize_keywords_for_kws(base_dir: str, train_ratio: float = 0.8,
 
 def load_dataset_split(base_dir: str, split: str = 'train'):
     """Load dataset split using metadata."""
-    metadata_path = os.path.join(base_dir, f'{split}_metadata.csv')
-    df = pd.read_csv(metadata_path)
-    
-    # If this is training data, handle augmentation
-    if split == 'train':
-        augmented_samples = df[df['augmented'] == True]
-        for _, row in augmented_samples.iterrows():
-            # Apply augmentation when loading
-            if not os.path.exists(row['file']):
-                apply_augmentation(row['path'], row['file'])
-    
-    return df
+    try:
+        metadata_path = os.path.join(base_dir, f'{split}_metadata.csv')
+        df = pd.read_csv(metadata_path)
+        
+        # If this is training data, handle augmentation
+        if split == 'train':
+            augmented_samples = df[df['augmented'] == True]
+            for _, row in augmented_samples.iterrows():
+                # Generate full output path
+                out_file = os.path.join(base_dir, row['file'])
+                # Apply augmentation if file doesn't exist
+                if not os.path.exists(out_file):
+                    apply_augmentation(row['path'], out_file)
+        
+        return df
+    except Exception as e:
+        print(f"Error loading dataset split: {str(e)}")
+        raise
 
 def main() -> None:
     """Main function to extract Vietnamese keywords."""
