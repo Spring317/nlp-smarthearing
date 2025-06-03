@@ -136,26 +136,26 @@ def load_weights_from_cpp_model(model, weights_file=None, skip_fc=True):
     
     # Extract weights using regex
     weight_patterns = {
-        'conv1_wt': 'CONV1_WT\s*{\s*([-0-9,\s]+)}',
-        'conv1_bias': 'CONV1_BIAS\s*{\s*([-0-9,\s]+)}',
-        'conv2_ds_wt': 'CONV2_DS_WT\s*{\s*([-0-9,\s]+)}',
-        'conv2_ds_bias': 'CONV2_DS_BIAS\s*{\s*([-0-9,\s]+)}',
-        'conv2_pw_wt': 'CONV2_PW_WT\s*{\s*([-0-9,\s]+)}',
-        'conv2_pw_bias': 'CONV2_PW_BIAS\s*{\s*([-0-9,\s]+)}',
-        'conv3_ds_wt': 'CONV3_DS_WT\s*{\s*([-0-9,\s]+)}',
-        'conv3_ds_bias': 'CONV3_DS_BIAS\s*{\s*([-0-9,\s]+)}',
-        'conv3_pw_wt': 'CONV3_PW_WT\s*{\s*([-0-9,\s]+)}',
-        'conv3_pw_bias': 'CONV3_PW_BIAS\s*{\s*([-0-9,\s]+)}',
-        'conv4_ds_wt': 'CONV4_DS_WT\s*{\s*([-0-9,\s]+)}',
-        'conv4_ds_bias': 'CONV4_DS_BIAS\s*{\s*([-0-9,\s]+)}',
-        'conv4_pw_wt': 'CONV4_PW_WT\s*{\s*([-0-9,\s]+)}',
-        'conv4_pw_bias': 'CONV4_PW_BIAS\s*{\s*([-0-9,\s]+)}',
-        'conv5_ds_wt': 'CONV5_DS_WT\s*{\s*([-0-9,\s]+)}',
-        'conv5_ds_bias': 'CONV5_DS_BIAS\s*{\s*([-0-9,\s]+)}',
-        'conv5_pw_wt': 'CONV5_PW_WT\s*{\s*([-0-9,\s]+)}',
-        'conv5_pw_bias': 'CONV5_PW_BIAS\s*{\s*([-0-9,\s]+)}',
-        'final_fc_wt': 'FINAL_FC_WT\s*{\s*([-0-9,\s]+)}',
-        'final_fc_bias': 'FINAL_FC_BIAS\s*{\s*([-0-9,\s]+)}'
+        'conv1_wt': r'CONV1_WT\s*{\s*([-0-9,\s]+)}',
+        'conv1_bias': r'CONV1_BIAS\s*{\s*([-0-9,\s]+)}',
+        'conv2_ds_wt': r'CONV2_DS_WT\s*{\s*([-0-9,\s]+)}',
+        'conv2_ds_bias': r'CONV2_DS_BIAS\s*{\s*([-0-9,\s]+)}',
+        'conv2_pw_wt': r'CONV2_PW_WT\s*{\s*([-0-9,\s]+)}',
+        'conv2_pw_bias': r'CONV2_PW_BIAS\s*{\s*([-0-9,\s]+)}',
+        'conv3_ds_wt': r'CONV3_DS_WT\s*{\s*([-0-9,\s]+)}',
+        'conv3_ds_bias': r'CONV3_DS_BIAS\s*{\s*([-0-9,\s]+)}',
+        'conv3_pw_wt': r'CONV3_PW_WT\s*{\s*([-0-9,\s]+)}',
+        'conv3_pw_bias': r'CONV3_PW_BIAS\s*{\s*([-0-9,\s]+)}',
+        'conv4_ds_wt': r'CONV4_DS_WT\s*{\s*([-0-9,\s]+)}',
+        'conv4_ds_bias': r'CONV4_DS_BIAS\s*{\s*([-0-9,\s]+)}',
+        'conv4_pw_wt': r'CONV4_PW_WT\s*{\s*([-0-9,\s]+)}',
+        'conv4_pw_bias': r'CONV4_PW_BIAS\s*{\s*([-0-9,\s]+)}',
+        'conv5_ds_wt': r'CONV5_DS_WT\s*{\s*([-0-9,\s]+)}',
+        'conv5_ds_bias': r'CONV5_DS_BIAS\s*{\s*([-0-9,\s]+)}',
+        'conv5_pw_wt': r'CONV5_PW_WT\s*{\s*([-0-9,\s]+)}',
+        'conv5_pw_bias': r'CONV5_PW_BIAS\s*{\s*([-0-9,\s]+)}',
+        'final_fc_wt': r'FINAL_FC_WT\s*{\s*([-0-9,\s]+)}',
+        'final_fc_bias': r'FINAL_FC_BIAS\s*{\s*([-0-9,\s]+)}'
     }
     
     weights = {}
@@ -262,34 +262,34 @@ def predict_keyword(model, audio_file, keyword_labels):
 
 
 
-def main():
-    # Get labels first to determine number of classes
-    labels = get_keyword_labels()
-    NUM_CLASSES = len(labels)
-    print(f"Creating model with {NUM_CLASSES} classes based on dataset")
+# def main():
+#     # Get labels first to determine number of classes
+#     labels = get_keyword_labels()
+#     NUM_CLASSES = len(labels)
+#     print(f"Creating model with {NUM_CLASSES} classes based on dataset")
     
-    # Create model with dataset's number of classes
-    model = DS_CNN_KWS(num_classes=NUM_CLASSES)
-    print("DS-CNN KWS model created")
+#     # Create model with dataset's number of classes
+#     model = DS_CNN_KWS(num_classes=NUM_CLASSES)
+#     print("DS-CNN KWS model created")
     
-    # Load weights but skip FC layer
-    load_weights_from_cpp_model(model, skip_fc=True)
+#     # Load weights but skip FC layer
+#     load_weights_from_cpp_model(model, skip_fc=True)
     
-    print(f"Number of available labels: {len(labels)}")
+#     print(f"Number of available labels: {len(labels)}")
     
-    # Example usage
-    print("Model architecture:")
-    print(model)
+#     # Example usage
+#     print("Model architecture:")
+#     print(model)
     
-    # Example input with debug prints
-    example_input = torch.randn(1, 1, 10, 49)
-    print(f"\nInput shape: {example_input.shape}")
+#     # Example input with debug prints
+#     example_input = torch.randn(1, 1, 10, 49)
+#     print(f"\nInput shape: {example_input.shape}")
     
-    with torch.no_grad():
-        example_output = model(example_input)
-        print(f"Output shape: {example_output.shape}")
+#     with torch.no_grad():
+#         example_output = model(example_input)
+#         print(f"Output shape: {example_output.shape}")
         
-    print("\nModel is ready for keyword spotting!")
+#     print("\nModel is ready for keyword spotting!")
 
-if __name__ == "__main__":
-    main()
+# if __name__ == "__main__":
+#     main()

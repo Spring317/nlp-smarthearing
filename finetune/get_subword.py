@@ -149,21 +149,9 @@ class VietnameseKeywordExtractor:
         syllables: List[str],
         char_tokens: str,
         chars_per_sec: float,
-        num_chunks: int = 3  # Number of chunks to generate per syllable
+        num_chunks: int = 3
     ) -> int:
-        """Extract audio segments for each syllable with multiple chunks.
-        
-        Args:
-            waveform: Audio waveform tensor
-            sr: Sample rate
-            syllables: List of syllables
-            char_tokens: Full character transcription
-            chars_per_sec: Characters per second for timing estimation
-            num_chunks: Number of different chunk positions to generate
-            
-        Returns:
-            Number of valid segments extracted
-        """
+        """Extract audio segments for each syllable with multiple chunks."""
         valid_subwords = 0
         current_pos = 0
         
@@ -176,6 +164,16 @@ class VietnameseKeywordExtractor:
             if syllable_duration < self.min_duration or syllable_duration > self.max_duration:
                 current_pos += syllable_len
                 continue
+            
+            # Clean syllable for directory name
+            syllable_clean = re.sub(
+                r'[^\w\sáàảãạăắằẳẵặâấầẩẫậéèẻẽẹêếềểễệíìỉĩịóòỏõọôốồổỗộơớờởỡợúùủũụưứừửữựýỳỷỹỵđ]', 
+                '', syllable
+            )
+            
+            # Ensure syllable directory exists
+            syllable_dir = os.path.join(self.output_dir, syllable_clean)
+            os.makedirs(syllable_dir, exist_ok=True)
             
             # Calculate base start and end samples
             base_start = int(current_pos / len(char_tokens) * waveform.shape[1])
@@ -196,16 +194,10 @@ class VietnameseKeywordExtractor:
                 # Extract audio segment
                 segment_waveform = waveform[:, chunk_start:chunk_end]
                 
-                # Clean syllable for filename
-                syllable_clean = re.sub(
-                    r'[^\w\sáàảãạăắằẳẵặâấầẩẫậéèẻẽẹêếềểễệíìỉĩịóòỏõọôốồổỗộơớờởỡợúùủũụưứừửữựýỳỷỹỵđ]', 
-                    '', syllable
-                )
-                
-                # Save syllable audio with chunk identifier
+                # Save with only chunk number as filename
                 file_path = os.path.join(
-                    self.output_dir, 
-                    f"{valid_subwords:03d}_{syllable_clean}_chunk{chunk_idx}.wav"
+                    syllable_dir, 
+                    f"{valid_subwords:03d}_chunk{chunk_idx}.wav"
                 )
                 
                 # Only save if the chunk is long enough
@@ -214,8 +206,8 @@ class VietnameseKeywordExtractor:
                     torchaudio.save(file_path, segment_waveform, sample_rate=sr)
                     print(f"Saved: {file_path} | Duration: {chunk_duration:.2f}s | Syllable: {syllable}")
                     valid_subwords += 1
-        
-        current_pos += syllable_len
+            
+            current_pos += syllable_len
     
         return valid_subwords
     
@@ -335,13 +327,23 @@ def apply_augmentation(audio_path: str, out_path: str, sr: int = 16000):
         print(f"Saved augmented audio to sanitized filename: {sanitized_path} (original: {out_path})")
 
 def organize_keywords_for_kws(base_dir: str, train_ratio: float = 0.8, 
-                            target_samples: int = 50) -> None:
+                           target_samples: int = 50) -> None:
     """Create metadata file for train/test splits instead of copying files."""
     # Get all syllables and wav files
     syllables = extract_syllables(base_dir)
     wav_files = [f for f in os.listdir(base_dir) if f.endswith('.wav')]
     
-    print("Creating dataset splits metadata...")
+    print(f"Found {len(syllables)} syllables: {syllables}")
+    print(f"Found {len(wav_files)} WAV files in {base_dir}")
+    
+    # Debug: Show a sample of WAV files
+    if wav_files:
+        print("Sample WAV files:")
+        for f in wav_files[:5]:
+            print(f"  {f}")
+    else:
+        print(f"No WAV files found in {base_dir}")
+        print(f"Directory contents: {os.listdir(base_dir)[:10]}")
     
     # Initialize metadata dictionary
     metadata = {
@@ -483,7 +485,7 @@ def main() -> None:
     
     # Organize dataset with augmentation and train/test split, then cleanup
     print("Organizing extracted keywords for KWS training...")
-    organize_keywords_for_kws(args.output_dir, train_ratio=0.8, target_samples=50, cleanup=True)
+    organize_keywords_for_kws(args.output_dir, train_ratio=0.8, target_samples=50)
 
 
 if __name__ == "__main__":
