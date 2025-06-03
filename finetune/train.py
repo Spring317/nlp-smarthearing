@@ -35,8 +35,8 @@ class KeywordSpottingDataset(Dataset):
         
         # Signal audio loading
         syllable = row['syllable']
-        if idx % 100 == 0:  # Only print every 100th sample to avoid flooding the console
-            print(f"Loading audio sample {idx}: {file_path} (class: {syllable})")
+        # if idx % 100 == 0:  # Only print every 100th sample to avoid flooding the console
+        print(f"Loading audio sample {idx}: {file_path} (class: {syllable})")
         
         # Extract MFCC features
         mfcc = extract_mfcc_features(file_path)
