@@ -12,11 +12,19 @@ from get_subword import load_dataset_split
 
 class KeywordSpottingDataset(Dataset):
     """Dataset for keyword spotting using metadata CSV files"""
-    def __init__(self, base_dir: str, split: str = 'train'):
+    def __init__(self, base_dir: str, split: str = 'train', max_samples=None):
         self.base_dir = base_dir
         self.df = load_dataset_split(base_dir, split)
+        
+        # Apply sample limitation if specified
+        if max_samples is not None:
+            print(f"Limiting {split} dataset to {max_samples} samples (from {len(self.df)})")
+            self.df = self.df.head(max_samples)
+            
         self.classes = sorted(self.df['syllable'].unique())
         self.class_to_idx = {cls: idx for idx, cls in enumerate(self.classes)}
+        print(f"Loaded {split} dataset with {len(self.df)} samples across {len(self.classes)} classes")
+        print(f"Classes: {', '.join(self.classes)}")
         
     def __len__(self):
         return len(self.df)
@@ -25,12 +33,21 @@ class KeywordSpottingDataset(Dataset):
         row = self.df.iloc[idx]
         file_path = row['path'] if not row['augmented'] else os.path.join(self.base_dir, row['file'])
         
+        # Signal audio loading
+        syllable = row['syllable']
+        if idx % 100 == 0:  # Only print every 100th sample to avoid flooding the console
+            print(f"Loading audio sample {idx}: {file_path} (class: {syllable})")
+        
         # Extract MFCC features
         mfcc = extract_mfcc_features(file_path)
         mfcc_tensor = torch.from_numpy(mfcc).float().unsqueeze(0)  # Add channel dimension
         
+        # Signal preprocessing completion
+        if idx % 100 == 0:
+            print(f"Processed MFCC features: shape={mfcc_tensor.shape}, min={mfcc_tensor.min():.2f}, max={mfcc_tensor.max():.2f}")
+        
         # Get class label
-        label = self.class_to_idx[row['syllable']]
+        label = self.class_to_idx[syllable]
         label_tensor = torch.tensor(label, dtype=torch.long)
         
         return mfcc_tensor, label_tensor
@@ -103,6 +120,8 @@ def main():
     parser.add_argument('--data-dir', default='kws_segments')
     parser.add_argument('--no-cuda', action='store_true')
     parser.add_argument('--save-dir', default='checkpoints')
+    parser.add_argument('--max-samples', type=int, default=None, 
+                        help='Maximum number of samples to use per dataset split (for debugging)')
     args = parser.parse_args()
     
     # Create save directory
@@ -114,8 +133,8 @@ def main():
     print(f'Using device: {device}')
     
     # Create datasets
-    train_dataset = KeywordSpottingDataset(args.data_dir, split='train')
-    test_dataset = KeywordSpottingDataset(args.data_dir, split='test')
+    train_dataset = KeywordSpottingDataset(args.data_dir, split='train', max_samples=args.max_samples)
+    test_dataset = KeywordSpottingDataset(args.data_dir, split='test', max_samples=args.max_samples)
     
     # Create data loaders
     train_loader = DataLoader(
