@@ -447,6 +447,7 @@ def main():
     parser.add_argument("--max-keywords", type=int, default=1000, help="Maximum number of keywords to keep")
     parser.add_argument("--use-pca", action="store_true", help="Apply PCA to features")
     parser.add_argument("--pca-components", type=int, default=100, help="Number of PCA components")
+    parser.add_argument("--resume-from", default=None, help="Path to checkpoint to resume training from")
     args = parser.parse_args()
     
     # Create save directory
@@ -454,7 +455,7 @@ def main():
     
     # Set device
     use_cuda = not args.no_cuda and torch.cuda.is_available()
-    device = torch.device("cuda" if use_cuda else "cpu")
+    device = torch.device("cuda:1" if use_cuda else "cpu")
     print(f"Using device: {device}")
     
     # Create datasets
@@ -535,6 +536,27 @@ def main():
         num_mfcc=40,
         num_frames=args.fixed_length
     )
+
+    if args.resume_from:
+        print(f"Loading checkpoint from {args.resume_from}...")
+        checkpoint = torch.load(args.resume_from, map_location=device)
+        
+        # Check if keywords in checkpoint match the dataset
+        checkpoint_keywords = checkpoint.get('keywords', [])
+        if len(checkpoint_keywords) != train_dataset.num_keywords:
+            print(f"Warning: Number of keywords in checkpoint ({len(checkpoint_keywords)}) "
+                  f"doesn't match dataset ({train_dataset.num_keywords}).")
+            # Option to handle mismatched keywords - simplest is to require exact match
+            
+        # Load model weights
+        model.load_state_dict(checkpoint['model_state_dict'])
+        model = model.to(device)
+        
+        # Set up training variables
+        start_epoch = checkpoint.get('epoch', 0) + 1
+        best_f1 = checkpoint.get('val_metrics', {}).get('f1', 0.0)
+        
+        print(f"Resuming from epoch {start_epoch} with best F1: {best_f1:.4f}")
     
     # Load pre-trained weights
     load_weights_from_cpp_model(model, skip_fc=True)
