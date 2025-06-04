@@ -365,14 +365,15 @@ def apply_pca_to_features(model, train_loader, n_components=100, device="cpu"):
         device: Device to use
     
     Returns:
-        PCA model
+        PCA model, features
     """
     print("\n===== APPLYING PCA TO FEATURES =====")
     
     # Extract features from the convolutional layers
     features = []
+    labels = []
     with torch.no_grad():
-        for inputs, _ in tqdm(train_loader, desc="Extracting features for PCA"):
+        for inputs, targets in tqdm(train_loader, desc="Extracting features for PCA"):
             inputs = inputs.to(device)
             
             # Get feature representations (before FC layer)
@@ -384,19 +385,20 @@ def apply_pca_to_features(model, train_loader, n_components=100, device="cpu"):
             x = model.conv5(x)
             x = x.view(inputs.size(0), -1)
             features.append(x.cpu().numpy())
+            labels.append(targets.cpu().numpy())
     
-    # Concatenate all features
+    # Concatenate all features and labels
     features = np.vstack(features)
+    labels = np.vstack(labels) if len(labels) > 0 else np.array([])
     
     # Apply PCA
     pca = PCA(n_components=n_components)
-    pca.fit(features)
+    transformed_features = pca.fit_transform(features)
     
     print(f"Applied PCA: {features.shape[1]} -> {n_components} dimensions")
     print(f"Explained variance ratio: {sum(pca.explained_variance_ratio_):.4f}")
     
-    return pca
-
+    return pca, transformed_features, labels
 
 def plot_and_save_metrics(history, save_dir):
     """Plot training metrics and save to files"""
@@ -539,10 +541,33 @@ def main():
     model = model.to(device)
     
     # Apply PCA if requested
+    # Apply PCA if requested
     if args.use_pca:
-        # This would need a more complex model architecture to implement
-        print("WARNING: PCA implementation requires modifying the model architecture")
-        print("         This is not implemented in the current version")
+        print("\nApplying PCA to feature representations...")
+        pca, transformed_features, pca_labels = apply_pca_to_features(
+            model, train_loader, n_components=args.pca_components, device=device
+        )
+        
+        # Print top keywords found in each component
+        print("\n===== TOP KEYWORDS FOR PCA COMPONENTS =====")
+        
+        # Find the most common keywords for samples with high values in each component
+        num_keywords_to_display = 5  # Number of top keywords to display
+        for i in range(min(5, args.pca_components)):  # Show first 5 components only
+            print(f"\nPCA Component {i+1}:")
+            # Get indices of samples with high values in this component
+            top_indices = np.argsort(-transformed_features[:, i])[:20]
+            
+            # Count keyword occurrences in these samples
+            keyword_counts = Counter()
+            for idx in top_indices:
+                for k_idx in np.where(pca_labels[idx] > 0)[0]:
+                    keyword = train_dataset.keywords[k_idx]
+                    keyword_counts[keyword] += 1
+            
+            # Print the most common keywords
+            for keyword, count in keyword_counts.most_common(num_keywords_to_display):
+                print(f"  - {keyword}: {count} occurrences")
     
     # Calculate positive weight for loss function to handle class imbalance
     pos_weight = torch.ones(train_dataset.num_keywords)

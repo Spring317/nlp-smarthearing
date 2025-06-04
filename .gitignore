@@ -11,6 +11,5 @@ CTestTestfile.cmake
 _deps
 build
 .vscode
-finetune/kws_segments/
-
+fintetune/kws_dataset/
 *.*~
